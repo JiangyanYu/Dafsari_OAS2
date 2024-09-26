@@ -1,0 +1,1233 @@
+---
+title: "WHuang PBMC project"
+author: "Jiangyan Yu (jiangyan.yu.de@gmail.com)"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    code_folding: hide
+    number_sections: yes
+    theme: united
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+---
+in current analysis, no batch correction was performed.
+
+# general steps
+
+```{r global_options}
+knitr::opts_chunk$set(warning=FALSE, messgae=FALSE, fig.path='Figs/', results = "hide")
+## fig.width=4, fig.height=4
+```
+
+## load library
+
+```{r include=FALSE}
+rm(list=ls())
+gc()
+#CRAN packages
+list.of.packages <- c("readr",
+                      "cowplot",
+                      "useful",
+                      "stringr",
+                      "umap",
+                      "ggplot2",
+                      "reshape2",
+                      "dplyr",
+                      "tidyr",
+                      "Matrix.utils",
+                      "VGAM",
+                      "plotly",
+                      "future",
+                      "data.table"
+)
+
+# new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+# if(length(new.packages)>0) 
+#   install.packages(new.packages)
+
+#BioconductoR packages
+list.of.bioc.packages <- c("tximport",
+                           "DESeq2",
+                           "Seurat",
+                           "slingshot",
+                           "flowCore",
+                           "biomaRt",
+                           "clusterProfiler",
+                           "org.Hs.eg.db",
+                           "org.Mm.eg.db",
+                           "GSEABase",
+                           "DOSE",
+                           "BiocGenerics",
+                           "DelayedArray",
+                           "DelayedMatrixStats",
+                           "limma",
+                           "S4Vectors",
+                           "SingleCellExperiment",
+                           "SummarizedExperiment",
+                           "batchelor")
+                           # "annotables")
+new.packages.bioc <- list.of.bioc.packages[!(list.of.bioc.packages %in% installed.packages()[,"Package"])]
+# 
+if(length(new.packages.bioc)>0)if (!requireNamespace("BiocManager")) install.packages("BiocManager")
+BiocManager::install(new.packages.bioc, update = FALSE)
+
+lapply(c(list.of.packages,list.of.bioc.packages), require, character.only = TRUE)
+
+rm(list.of.bioc.packages,list.of.packages,new.packages,new.packages.bioc)
+```
+
+## parallel computing
+
+multicore does not work in rstudio. better to use plan::multiprocess
+
+```{r include=FALSE}
+
+# library(parallel)
+# nworkers <- detectCores() 
+# print(paste("bootstrapping using parLapply, fork cluster, and", nworkers, "workers"))
+# cl <- makeForkCluster(nworkers-1)
+# clusterSetRNGStream(cl, 1001) #make the bootstrapping exactly the same as above to equate computation time
+
+# cl <- makeCluster(8)
+# doParallel::registerDoParallel(cl)
+# change the current plan to access seurat parallelization
+# plan("multiprocess", workers = detectCores()-1)
+# options(future.globals.maxSize = 20000 * 1024^2)
+```
+
+## working directory
+
+```{r}
+## Mac directory
+working.dir = "/home/jyu/rstudio/"
+global_ref_dir = paste0(working.dir,"/analysis_jyu/Scripts/")
+gsea_pathway_dir = paste0(working.dir,"/analysis_jyu/Scripts/")
+source(paste0(global_ref_dir,"general_functions.R"))
+# 
+allcolour=c("#DC143C","#0000FF","#20B2AA","#FFA500","#9370DB","#98FB98","#F08080","#1E90FF","#7CFC00","#FFFF00",
+              "#808000","#FF00FF","#FA8072","#7B68EE","#9400D3","#800080","#A0522D","#D2B48C","#D2691E","#87CEEB","#40E0D0","#5F9EA0",
+              "#FF1493","#0000CD","#008B8B","#FFE4B5","#8A2BE2","#228B22","#E9967A","#4682B4","#32CD32","#F0E68C","#FFFFE0","#EE82EE",
+              "#FF6347","#6A5ACD","#9932CC","#8B008B","#8B4513","#DEB887")
+```
+
+# load count matrix
+
+```{r}
+# sample_names = list.files(path = paste0(working.dir,"/cellranger/"))
+# 
+# tmp_list = list()
+# for (i in c(1:length(sample_names))){
+#   tmp_seurat = Read10X(data.dir = paste0(working.dir,"/cellranger/",sample_names[i],"/outs/per_sample_outs/",sample_names[i],"/count/sample_filtered_feature_bc_matrix"))
+#   tmp_seurat = CreateSeuratObject(counts = tmp_seurat)
+#   tmp_seurat$sample = sample_names[i]
+#   
+#   tmp_list[i] = tmp_seurat
+#   
+# }
+# 
+# vdj_combined = merge(tmp_list[1][[1]],y=c(tmp_list[2][[1]],tmp_list[3][[1]],tmp_list[4][[1]],tmp_list[5][[1]],tmp_list[6][[1]],tmp_list[7][[1]],tmp_list[8][[1]]),
+#                      add.cell.ids = sample_names)
+# 
+# rm(sample_names,tmp_list,i,tmp_seurat)
+```
+
+## basic qc
+
+```{r}
+# vdj_combined[["percent.mt"]] <- PercentageFeatureSet(vdj_combined, pattern = "^MT-")
+# VlnPlot(vdj_combined, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3,group.by = "sample",pt.size = 0)
+# VlnPlot(vdj_combined, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3,group.by = "seurat_clusters",pt.size = 0)
+# plot1 <- FeatureScatter(vdj_combined, feature1 = "nCount_RNA", feature2 = "percent.mt")
+# plot2 <- FeatureScatter(vdj_combined, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+# plot1 + plot2
+# 
+# rm(plot1,plot2)
+```
+
+## number of cells per sample before filtering
+
+```{r, results='asis'}
+# table(vdj_combined$sample)
+```
+
+## basic filtering
+
+```{r}
+# vdj_combined = subset(vdj_combined,subset = nFeature_RNA > 1000 & nFeature_RNA < 2500 & percent.mt < 5)
+# 
+# VlnPlot(vdj_combined, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3,group.by = "sample",pt.size = 0)
+# 
+# plot1 <- FeatureScatter(vdj_combined, feature1 = "nCount_RNA", feature2 = "percent.mt")
+# plot2 <- FeatureScatter(vdj_combined, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+# plot1 + plot2
+# 
+# rm(plot1,plot2)
+```
+
+## number of cells per sample
+
+```{r, results='asis'}
+# table(vdj_combined$sample)
+```
+
+
+# seurat
+
+```{r}
+# vdj_combined <- NormalizeData(vdj_combined, normalization.method = "LogNormalize", scale.factor = 10000)
+# vdj_combined <- FindVariableFeatures(vdj_combined, selection.method = "vst", nfeatures = 2000)
+# 
+# # Identify the 10 most highly variable genes
+# top10 <- head(VariableFeatures(vdj_combined), 10)
+# 
+# # plot variable features with and without labels
+# plot1 <- VariableFeaturePlot(vdj_combined)
+# plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+# plot1 + plot2
+# 
+# # only take top 2000 feature genes for scaling
+# vdj_combined <- ScaleData(vdj_combined)
+# 
+# vdj_combined <- RunPCA(vdj_combined, features = VariableFeatures(object = vdj_combined))
+# 
+# # Examine and visualize PCA results a few different ways
+# print(vdj_combined[["pca"]], dims = 1:5, nfeatures = 5)
+# 
+# DimPlot(vdj_combined, reduction = "pca",group.by = "sample")
+# 
+# # NOTE: This process can take a long time for big datasets, comment out for expediency. More
+# # approximate techniques such as those implemented in ElbowPlot() can be used to reduce
+# # computation time
+# # vdj_combined <- JackStraw(vdj_combined, num.replicate = 100)
+# # vdj_combined <- ScoreJackStraw(vdj_combined, dims = 1:20)
+# 
+# ElbowPlot(vdj_combined)
+# 
+# rm(top10,plot1,plot2)
+```
+
+## cluster and umap
+
+```{r}
+# vdj_combined <- FindNeighbors(vdj_combined, dims = 1:30)
+# vdj_combined <- FindClusters(vdj_combined, resolution = 0.5)
+# 
+# # If you haven't installed UMAP, you can do so via reticulate::py_install(packages =
+# # 'umap-learn')
+# vdj_combined <- RunUMAP(vdj_combined,
+#                             reduction = "pca",
+#                             dims = 1:30,
+#                             n.neighbors = 30,
+#                             min.dist = 1,
+#                             n.components = 3,
+#                         a = 1,
+#                         b = 0.85,
+#                             spread = 1)
+# 
+# # note that you can set `label = TRUE` or use the LabelClusters function to help label
+# # individual clusters
+# DimPlot(vdj_combined, reduction = "umap")
+```
+
+## any batch effects?
+
+no obvious batch effects were observed, thus continue following analysis
+```{r}
+# DimPlot(vdj_combined, reduction = "umap",group.by = "sample")
+# DimPlot(vdj_combined, reduction = "umap",split.by = "sample",ncol=3,group.by = "seurat_clusters",label = TRUE)
+# DimPlot(vdj_combined, reduction = "umap",split.by = "sample",ncol=3,group.by = "seurat_clusters",label = TRUE,dims = c(1,3))
+# DimPlot(vdj_combined, reduction = "umap",split.by = "sample",ncol=3,group.by = "seurat_clusters",label = TRUE,dims = c(2,3))
+```
+
+
+### umap split by variants
+
+```{r}
+# DimPlot(vdj_combined, reduction = "umap",split.by = "variant",ncol=3,label = TRUE)
+# DimPlot(vdj_combined, reduction = "umap",split.by = "variant",ncol=3,label = TRUE,dims = c(2,3))
+# DimPlot(vdj_combined, reduction = "umap",split.by = "sample",ncol=3,label = TRUE,dims = c(1,3),group.by = "seurat_clusters")
+# 
+# 
+# DimPlot(vdj_combined, reduction = "umap",split.by = "celltype",ncol=4,label = FALSE,dims = c(1,3),group.by = "sample")
+# DimPlot(vdj_combined, reduction = "umap",ncol=3,label = TRUE,dims = c(2,3))
+```
+
+
+# marker genes
+
+```{r}
+# vdj_deg = FindAllMarkers(vdj_combined)
+# 
+# 
+# write.csv(x=vdj_deg,file =  paste0(working.dir,"/analysis_jyu/vdj_8combined_1kfeature_noBatchRmv_deg.csv"))
+```
+
+
+### heatmap
+
+```{r}
+# vdj_deg = read_csv(file =  paste0(working.dir,"/analysis_jyu/vdj_8combined_1kfeature_noBatchRmv_deg.csv"))
+# 
+# vdj_deg %>%
+#     group_by(cluster) %>%
+#     top_n(n = 5, wt = avg_log2FC) -> top10
+# # pdf(file = paste0(working.dir,"/analysis_jyu/cell_freq.heatmap.pdf"),height = 60,width = 40)
+# # DoHeatmap(vdj_combined, features = top10$gene) + NoLegend()
+# # dev.off()
+# 
+# 
+# tmp_cell = vdj_combined@meta.data 
+# tmp_cell$cell = rownames(tmp_cell)
+# 
+# tmp_cell = tmp_cell %>% dplyr::group_by(seurat_clusters) %>% slice_sample(n=20) 
+# 
+# tmp_genes = vdj_deg[vdj_deg$cluster %in% c("0","1","2","3",4,5,6,8,10,11,13,14,15,19),] %>% 
+#   group_by(cluster) %>%
+#     top_n(n = 8, wt = avg_log2FC)
+# 
+# tmp_genes = vdj_deg %>% 
+#   group_by(cluster) %>%
+#     top_n(n = 6, wt = avg_log2FC)
+# DoHeatmap(vdj_combined[,tmp_cell$cell], features = tmp_genes$gene) + NoLegend()
+# 
+# rm(tmp_cell,tmp_genes)
+```
+
+# cluster annotation
+
+using Jonas' dataset to annotate the clusters
+
+```{r}
+# ref_seurat = readRDS(file = paste0(working.dir,"/analysis_jyu/seurat_COVID19_PBMC_cohort1_10x_jonas_FG_2020-08-15.rds"))
+# 
+# pbmc_anchors <- FindTransferAnchors(reference = ref_seurat, query = vdj_combined,
+#     dims = 1:30, reference.reduction = "pca")
+# predictions <- TransferData(anchorset = pbmc_anchors, refdata = ref_seurat$id.celltype,
+#     dims = 1:30)
+# 
+# vdj_combined <- AddMetaData(vdj_combined, metadata = predictions)
+# 
+# saveRDS(object = vdj_combined,file = paste0(working.dir,"/analysis_jyu/vdj_8combined_1kfeature_noBatchRmv.rds"))
+```
+report for above scripts can be found in "WHuang_PBMC_1000feature_preprocess.html"
+
+# load save object
+
+```{r}
+vdj_combined = readRDS(file = paste0(working.dir,"/analysis_jyu/vdj_8combined_1kfeature_noBatchRmv1.rds"))
+```
+
+## add clinical info
+
+```{r}
+sample_info = read.csv(file=paste0(working.dir,"/analysis_jyu/sample_info.txt"))
+tmp_data = vdj_combined@meta.data
+tmp_data$order = c(1:nrow(tmp_data))
+tmp_data = merge(tmp_data[,c("sample","order")],sample_info,by.x="sample",by.y="sample")
+tmp_data = tmp_data[order(tmp_data$order),]
+rownames(tmp_data) = rownames(vdj_combined@meta.data)
+
+vdj_combined = AddMetaData(vdj_combined,metadata = tmp_data[,"variant"],col.name = "variant")
+vdj_combined = AddMetaData(vdj_combined,metadata = tmp_data[,"age"],col.name = "age")
+vdj_combined = AddMetaData(vdj_combined,metadata = tmp_data[,"relationship"],col.name = "relationship")
+
+rm(sample_info, tmp_data)
+```
+## rename cells
+ClassicalMonocyte, Megakaryocyte
+
+0:restingCD4+ (IL7R,AQP3) source: https://www.nature.com/articles/s41467-019-12464-3
+1,5:NaiveCD4+(SELL,KLF2,TCF7): https://www.nature.com/articles/s41467-019-12464-3
+11:Treg/Tfh (FXP3,CTLA4):https://www.nature.com/articles/s41467-019-12464-3
+3:cytotoxicCD8+Tcell(FCGR3A,KLRF1): https://www.cell.com/action/showPdf?pii=S0092-8674%2818%2931568-X
+4:naiveCD8+(CCR7,SELL,TCF7):https://www.nature.com/articles/s41467-019-12464-3
+10,15: dysfunctionCD8(LAG3):https://www.cell.com/action/showPdf?pii=S0092-8674%2818%2931568-X
+14:gamma-delta (TRDV2, TRGV9): https://www.nature.com/articles/s41590-020-0762-x
+
+### cluster_celltype
+
+```{r}
+Idents(vdj_combined) = "seurat_clusters"
+
+vdj_combined = RenameIdents(vdj_combined,
+                            "0" = "0:RestingCD4+Tcell", 
+                            "1" = "1:NaiveCD4+Tcell",
+                            "2" = "2:CD8+Tcell",
+                            "3" = "3:CytotoxicCD8+Tcell",
+                            "4" = "4:NaiveCD8+Tcell",
+                            "5" = "5:NaiveCD4+Tcell",
+                            "6" = "6:NKcell",
+                            "7" = "7:Bcell",
+                            "8" = "8:CD8+Tcell",
+                            "9" = "9:Monocyte",
+                            "10" = "10:DysfunctionCD8+Tcell",
+                            "11" = "11:Tregcell",
+                            "12" = "12:Bcell",
+                            "13" = "13:Doublets",
+                            "14" = "14:GammaDeltaTcell",
+                            "15" = "15:DysfunctionCD8+Tcell",
+                            "16" = "16:Megakaryocyte",
+                            "17" = "17:Bcell",
+                            "18" = "18:NonClassicalMonocyte",
+                            "19" = "19:NKcell",
+                            "20" = "20:Plasmablasts",
+                            "21" = "21:pDC",
+                            "22" = "22:Plasmablasts"
+                            )
+
+vdj_combined$cluster_celltype = vdj_combined@active.ident
+```
+
+### cell type
+
+```{r}
+Idents(vdj_combined) = "seurat_clusters"
+
+vdj_combined = RenameIdents(vdj_combined,
+                            "0" = "CD4+Tcell",
+                            "1" = "CD4+Tcell",
+                            "2" = "CD8+Tcell",
+                            "3" = "CD8+Tcell",
+                            "4" = "CD8+Tcell",
+                            "5" = "CD4+Tcell",
+                            "6" = "NKcell",
+                            "7" = "Bcell",
+                            "8" = "CD8+Tcell",
+                            "9" = "Monocyte",
+                            "10" = "CD8+Tcell",
+                            "11" = "CD4+Tcell",
+                            "12" = "Bcell",
+                            "13" = "CD8+Tcell",
+                            "14" = "CD8+Tcell",
+                            "15" = "CD8+Tcell",
+                            "16" = "Megakaryocyte",
+                            "17" = "Bcell",
+                            "18" = "NonClassicalMonocyte",
+                            "19" = "NKcell",
+                            "20" = "Plasmablasts",
+                            "21" = "pDC",
+                            "22" = "Plasmablasts")
+
+vdj_combined$celltype = vdj_combined@active.ident
+
+Idents(vdj_combined) = "seurat_clusters"
+
+vdj_combined = RenameIdents(vdj_combined,
+                            "0" = "Tcell",
+                            "1" = "Tcell",
+                            "2" = "Tcell",
+                            "3" = "Tcell",
+                            "4" = "Tcell",
+                            "5" = "Tcell",
+                            "6" = "NKcell",
+                            "7" = "Bcell",
+                            "8" = "Tcell",
+                            "9" = "Monocyte",
+                            "10" = "Tcell",
+                            "11" = "Tcell",
+                            "12" = "Bcell",
+                            "13" = "NKcell",
+                            "14" = "Tcell",
+                            "15" = "Tcell",
+                            "16" = "Megakaryocyte",
+                            "17" = "Bcell",
+                            "18" = "Monocyte",
+                            "19" = "NKcell",
+                            "20" = "Plasmablasts",
+                            "21" = "pDC",
+                            "22" = "Plasmablasts")
+
+vdj_combined$major = vdj_combined@active.ident
+```
+
+## similar matrix
+
+```{r}
+# vdj_combined = readRDS(paste0(working.dir,"/analysis_jyu/vdj_8combined_noBatchRmv.rds"))
+
+tmp_prediction = colnames(vdj_combined@meta.data)[colnames(vdj_combined@meta.data) %like% "prediction.score"]
+tmp_prediction = tmp_prediction[1:(length(tmp_prediction)-1)]
+tmp_data = cbind(paste0(vdj_combined$cluster_celltype),vdj_combined@meta.data[,c(tmp_prediction)])
+colnames(tmp_data)[1] = "seurat_clusters"
+
+tmp_data = tmp_data%>%
+  group_by(seurat_clusters)%>%
+  summarise(across(tmp_prediction, mean))
+
+tmp = tmp_data[,c(2:ncol(tmp_data))]
+
+rownames(tmp) = tmp_data$seurat_clusters
+colnames(tmp) = str_replace(colnames(tmp),pattern = "prediction.score.",replacement = "")
+
+# pdf(paste0(working.dir,"/analysis_jyu/annotation_matrix_1kfeature.pdf"),height = 6, width = 7)
+#
+# col_order = c("9..CD4..T.cells_1","10..CD4..T.cells_2","11..CD4..T.cells_3","13..CD8..T.cells_2","14..CD8..T.cells_3","12..CD8..T.cells_1","15..NK.cells","16..B.cells_1","17..B.cells_2","18..B.cells_3","0..Classical.Monocytes","1..HLA.DR..CD83..Monocytes","2..CD163..Monocytes","3..HLA.DR..S100A..monocytes","4..Non.classical.Monocytes","7..mDCs","8..pDCs" ,"5..Neutrophils","6..Immature.Neutrophils","19..Plasmablasts", "20..Megakaryocyte","21..mixed","22..undefined" )
+#
+# row_order = c("0:CD4+Tcell","1:CD4+Tcell","4:CD4+Tcell","5:CD4+Tcell","11:CD4+Tcell","2:CD8+Tcell","8:CD8+Tcell","19:CD8+Tcell","10:CD8+Tcell","14:CD8+Tcell","15:CD8+Tcell","3:NK/CD8+Tcell","6:NKcell","13:NKcell","7:Bcell","12:Bcell","17:Bcell", "9:Monocyte", "18:NonClassicalMonocyte" ,"21:pDC", "20:Plasmablasts","22:Plasmablasts", "16:Megakaryocyte"  )
+#
+# tmp = tmp[row_order,]
+# tmp = tmp[,col_order]
+#
+# colnames(tmp) = col_order
+# rownames(tmp) = row_order
+
+ComplexHeatmap::Heatmap(t(tmp),cluster_rows = TRUE,cluster_columns = TRUE)
+
+# dev.off()
+rm(tmp_data, col_order, row_order, tmp_prediction,tmp)
+```
+
+
+## canonical markers
+
+```{r}
+# pdf(paste0(working.dir,"/analysis_jyu/canonical_markers.pdf"),height = 9,width = 12)
+FeaturePlot(vdj_combined,features = c("CD3D","CD4","CD8B","MS4A1","KLRD1","VCAN","FCER1A","PPBP","IGHA1"),
+            dims = c(1,3),
+            pt.size = 0.5,
+            order = TRUE,
+            cols = c("grey","pink","red"))
+
+DotPlot(vdj_combined,features = c("PTPRC","CD3D","CD19","CD4","CD8A","NKG7","MS4A1","PPBP","TCF7"))
+# dev.off()
+```
+
+## genes from Jonas' figs2A
+
+```{r}
+covid_genes = list(
+
+  classical_mono = c("LYZ","LGALS2","CST3","GPX1"),
+  CD83hi_mono = c("IFI27","NEAT1","VCAN","DUSP6"),
+  CD163hi_mono = c("IFITM3","ISG15","APOBEC3A","IFI6"),
+  S100Ahi_mono = c("S100A12","S100A9","S100A8","MAFB"),
+  Nonclassical_mono = c("FCGR3A","LST1","MS4A7","CDKN1C","AIF1"),
+  Neutrophil = c("FCGR3B","IFITM2","NAMPT","CXCL8","GOS2"),
+  immature_neutrophil = c("DEFA3","LTF","LCN2","CAMP","RETN"),
+  mDC = c("HLA-DPA1","HLA-DPB1","HLA-DRA","HLA-DQA1","HLA-DRB1"),
+  pDC = c("TCF4","ITM2C","IRF8","JCHAIN","PTGDS"),
+  CD4T = c("LDHB","TCF7","NOSIP","LTB","IL32","IL7R","TRAC"),
+  CD8T1 = c("CCL5","GZMK","GZMH","GZMA","CD8A"),
+  CD8T2 = c("STMN1","TUBA1B","MKI67","HMGB2"),
+  CD8T3 = c("SYNE2","SYNE1","NKTR"),
+  NK = c("GNLY","GZMB","NKG7","PRF1","FGFBP2"),
+  B = c("IGHM","CD79A","MS4A1","IGHD","CD79B"),
+  Plasmablast = c("IGLC2","IGHA1","IGC3","IGKC"),
+  Megakaryocyte = c("PPBP","PF4","NRGN","CAVIN2","GNG11")
+
+)
+
+
+for(i in names(covid_genes)){
+
+  p = DotPlot(vdj_combined,features = covid_genes[[i]])+
+    labs(title = i)
+
+  plot(p)
+
+}
+```
+
+## split by major
+
+```{r}
+# DimPlot(vdj_combined,dims = c(1,2),group.by = "cluster_celltype",label = TRUE)
+DimPlot(vdj_combined,dims = c(1,3),group.by = "cluster_celltype",label = TRUE)
+DimPlot(vdj_combined,dims = c(1,3),group.by = "celltype",label = TRUE)
+DimPlot(vdj_combined,dims = c(1,3),group.by = "major",label = TRUE)
+
+# DimPlot(vdj_combined,dims = c(2,3),group.by = "cluster_celltype",label = TRUE)
+
+```
+
+## barplot for cluster freq
+
+```{r}
+vdj_combined$sample_variant = paste0(vdj_combined$variant,"_",vdj_combined$relationship)
+vdj_combined$sample_variant = str_replace_all(vdj_combined$sample_variant,"_PBMC","")
+
+tmp_seurat = subset(vdj_combined,subset=celltype=="CD4+Tcell")
+
+cluster_freq_barplot = function(seurat_object,sample_meta,cell_type){
+  seurat_object = seurat_object
+  sample_meta = sample_meta
+  cell_type = cell_type
+
+  tmp_data = cbind(sample=seurat_object@meta.data[,sample_meta],cell_type= paste0("cluster",seurat_object@meta.data[,cell_type]) ) %>% as.data.frame()
+  ns <- table(sample = tmp_data$sample, cell_type = tmp_data$cell_type)
+  fq <- prop.table(ns, 1) * 100
+  df <- as.data.frame(fq)
+  # df = merge(df, unique(vdj_combined@meta.data[,c("sample","variant")]),by.x="sample",by.y="sample")
+  p = ggplot(df,aes(x=sample,y=Freq,fill=cell_type))+
+        geom_bar(stat = "identity")+
+    theme_classic()+
+        theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+  plot(p)
+
+  # return(p)
+
+}
+
+
+cluster_freq_barplot(seurat_object = tmp_seurat,
+                      sample_meta = "sample_variant",
+                      cell_type = "cluster_celltype")
+```
+
+## boxplot for cluster freq
+
+```{r}
+cluster_freq_boxplot = function(seurat_object,sample_meta,cell_type,group_by,my_comparison,nrow,my_col){
+  seurat_object = seurat_object
+  sample_meta = sample_meta
+  cell_type = cell_type
+  group_by = group_by
+  my_comparison = my_comparison
+  nrow=nrow
+  my_col = my_col
+
+  tmp_data = cbind(sample=seurat_object@meta.data[,sample_meta],cell_type= paste0("cluster",seurat_object@meta.data[,cell_type]) ) %>% as.data.frame()
+  ns <- table(sample = tmp_data$sample, cell_type = tmp_data$cell_type)
+  fq <- prop.table(ns, 1) * 100
+  df <- as.data.frame(fq)
+  df = merge(df, unique(seurat_object@meta.data[,c(sample_meta,group_by)]),by.x="sample",by.y=sample_meta)
+
+   p = ggpubr::ggboxplot(data = df, x=group_by, y= "Freq",add = "jitter",fill = group_by)+
+     ggpubr::stat_compare_means(aes(label = ..p.value..),comparisons = my_comparison,method = "t.test")+
+     scale_fill_manual(values = my_col)+
+     facet_wrap(~cell_type,scales = "free_y",nrow = nrow)+
+     xlab("")+
+     ylab("")+
+     theme(legend.position = "none",
+           axis.text = element_blank(),
+           axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ print(p)
+
+  # return(p)
+
+}
+
+my_comparison <- list( c("healthy","PUF60"),
+                        c("healthy","OAS2"),
+                        c("OAS2","PUF60"))
+
+my_col = c("healthy" = "#7CFC00",
+           "OAS2" = "#1E90FF",
+           "PUF60" = "#DC143C")
+
+cluster_freq_boxplot(seurat_object = vdj_combined,
+                      sample_meta = "sample_variant",
+                      cell_type = "major",
+                     group_by = "variant",
+                     my_comparison = my_comparison,
+                     nrow=2,
+                     my_col = my_col)
+
+cluster_freq_boxplot(seurat_object = vdj_combined,
+                      sample_meta = "sample_variant",
+                      cell_type = "cluster_celltype",
+                     group_by = "variant",
+                     my_comparison = my_comparison,
+                     nrow=3,
+                     my_col = my_col)
+
+cluster_freq_boxplot(seurat_object = tmp_seurat,
+                      sample_meta = "sample_variant",
+                      cell_type = "celltype",
+                     group_by = "variant",
+                     my_comparison = my_comparison,
+                     nrow=3,
+                     my_col = my_col)
+
+
+cluster_freq_boxplot(seurat_object = tmp_seurat,
+                      sample_meta = "sample_variant",
+                      cell_type = "cluster_celltype",
+                     group_by = "variant",
+                     my_comparison = my_comparison,
+                     nrow=3,
+                     my_col = my_col)
+
+
+rm(my_comparison)
+```
+
+## GSEA
+
+```{r}
+vdj_gsea = read.csv2(file = paste0(working.dir,"/analysis_jyu/vdj_8combined_1kfeature_noBatchRmv_deg_GOup_avglog2fc0.5.csv"))
+tmp_meta = unique(vdj_combined@meta.data[,c("seurat_clusters","cluster_celltype")])
+vdj_gsea = merge(vdj_gsea,tmp_meta,by.x="cluster","seurat_clusters")
+
+
+tmp_genes = vdj_gsea %>%
+  group_by(cluster) %>%
+    top_n(n = 5, wt = p.adjust)
+
+tmp_genes = vdj_gsea[vdj_gsea$ID %in% tmp_genes$ID,]
+
+tmp_genes$Description = factor(tmp_genes$Description,levels = unique(tmp_genes$Description[order(tmp_genes$cluster)]))
+
+ggplot(tmp_genes,aes(x=cluster_celltype,y=Description))+
+  geom_point()
+```
+
+
+### UMAP split by condition (major)
+
+1k per condition
+
+```{r}
+
+
+tmp = subset(vdj_combined,subset=variant=="OAS2")
+tmp = tmp[,sample(c(1:ncol(tmp)),size=1000)]
+
+dim(tmp)
+
+p1 = DimPlot(tmp,dims = c(1,3),group.by = "major") +
+  labs(title = "OAS2")+
+  theme(legend.position = "none")
+
+tmp = subset(vdj_combined,subset=variant=="healthy")
+tmp = tmp[,sample(c(1:ncol(tmp)),size=1000)]
+
+dim(tmp)
+
+p2 = DimPlot(tmp,dims = c(1,3),group.by = "major")+
+  labs(title = "Healthy")+
+  theme(legend.position = "none")
+
+tmp = subset(vdj_combined,subset=variant=="PUF60")
+tmp = tmp[,sample(c(1:ncol(tmp)),size=1000)]
+
+dim(tmp)
+
+p3 = DimPlot(tmp,dims = c(1,3),group.by = "major",label = TRUE)+
+  labs(title = "PUF60")+
+  theme(legend.position = "none")
+
+# pdf(paste0(working.dir,"/analysis_jyu/umap_seuratclusters_per_condition.pdf"),height = 4,width = 12)
+gridExtra::grid.arrange(p2,p1,p3,nrow=1,widths=c(4,4,4))
+
+# dev.off()
+# DimPlot(vdj_combined,dims = c(1,3),group.by = "celltype",label = FALSE,split.by = "sample",ncol=4)
+```
+
+
+### UMAP split by condition (major)
+
+1k per condition
+
+```{r}
+
+
+tmp = subset(vdj_combined,subset=variant=="OAS2")
+tmp = tmp[,sample(c(1:ncol(tmp)),size=1000)]
+
+dim(tmp)
+
+p1 = DimPlot(tmp,dims = c(1,3),group.by = "seurat_clusters") +
+  labs(title = "OAS2")+
+  theme(legend.position = "none")
+
+tmp = subset(vdj_combined,subset=variant=="healthy")
+tmp = tmp[,sample(c(1:ncol(tmp)),size=1000)]
+
+dim(tmp)
+
+p2 = DimPlot(tmp,dims = c(1,3),group.by = "seurat_clusters")+
+  labs(title = "Healthy")+
+  theme(legend.position = "none")
+
+tmp = subset(vdj_combined,subset=variant=="PUF60")
+tmp = tmp[,sample(c(1:ncol(tmp)),size=1000)]
+
+dim(tmp)
+
+p3 = DimPlot(tmp,dims = c(1,3),group.by = "seurat_clusters",label = TRUE)+
+  labs(title = "PUF60")+
+  theme(legend.position = "none")
+
+# pdf(paste0(working.dir,"/analysis_jyu/umap_seuratclusters_per_condition.pdf"),height = 4,width = 12)
+gridExtra::grid.arrange(p2,p1,p3,nrow=1,widths=c(4,4,4))
+
+# dev.off()
+# DimPlot(vdj_combined,dims = c(1,3),group.by = "celltype",label = FALSE,split.by = "sample",ncol=4)
+```
+
+# OAS2
+
+```{r}
+deg_per_cluster = data.frame()
+for(i in c(1:c(length(unique(vdj_combined$cluster_celltype))-3))){
+  type = unique(vdj_combined$cluster_celltype)[i]
+  cell1 = subset(vdj_combined@meta.data,variant=="OAS2" & cluster_celltype == as.character(type))
+  cell2 = subset(vdj_combined@meta.data,variant=="healthy" & cluster_celltype == as.character(type))
+  deg = FindMarkers(vdj_combined,ident.1 = rownames(cell1),ident.2 = rownames(cell2))
+  deg$cluster = paste0(type)
+
+  if(i==1){
+    deg_per_cluster = deg
+  }else{
+    deg_per_cluster = rbind(deg_per_cluster,deg)
+  }
+}
+
+
+OAS2vsHealthy = deg_per_cluster
+rm(i,type,cell1,cell2,deg,deg_per_cluster)
+
+tmp = subset(OAS2vsHealthy, avg_log2FC > 0.5 & pct.1 > 0.5 & cluster == "Monocyte")
+table(tmp$cluster)
+
+
+tmp_gsea = GSEA_calc_gene(gene_list = rownames(vdj_combined),
+                          DEG_list = rownames(subset(OAS2vsHealthy, avg_log2FC > 0.5 & pct.1 > 0.5 & cluster == "Monocyte")),
+                           comparison = NULL,
+                           species = "H", # H for human
+                           genes_down = NULL,
+                           genes_all = NULL,
+                           GeneSets =c("GO","KEGG","DO","Hallmark","cannonicalPathways","Motifs","ImmunoSignatures"),
+                           GOntology = "BP", #Alternative "MF" or "CC"
+                           pCorrection = "bonferroni", # choose the p-value adjustment method
+                           pvalueCutoff = 0.1, # set the unadj. or adj. p-value cutoff (depending on correction method)
+                           qvalueCutoff = 0.2 # set the q-value cutoff (FDR corrected))
+)
+
+
+dotplotGSEA(tmp_gsea$GOup)
+dotplotGSEA(tmp_gsea$KEGGup)
+dotplotGSEA(tmp_gsea$DOup)
+dotplotGSEA(tmp_gsea$HALLMARKup)
+dotplotGSEA(tmp_gsea$cannonicalPathwaysup)
+dotplotGSEA(tmp_gsea$Motifup)
+dotplotGSEA(tmp_gsea$ImmSigup)
+```
+
+```{r}
+deg_per_cluster = data.frame()
+for(i in c(1:c(length(unique(vdj_combined$cluster_celltype))-1))){
+  type = unique(vdj_combined$cluster_celltype)[i]
+  cell1 = subset(vdj_combined@meta.data,variant=="PUF60" & cluster_celltype == as.character(type))
+  cell2 = subset(vdj_combined@meta.data,variant=="healthy" & cluster_celltype == as.character(type))
+  deg = FindMarkers(vdj_combined,ident.1 = rownames(cell1),ident.2 = rownames(cell2))
+  deg$cluster = paste0(type)
+
+  if(i==1){
+    deg_per_cluster = deg
+  }else{
+    deg_per_cluster = rbind(deg_per_cluster,deg)
+  }
+}
+
+
+PUF60vsHealthy = deg_per_cluster
+rm(i,type,cell1,cell2,deg,deg_per_cluster)
+
+tmp = subset(PUF60vsHealthy, avg_log2FC > 0.5 & pct.1 > 0.5 )
+table(tmp$cluster)
+
+tmp_gsea = GSEA_calc_gene(gene_list = rownames(vdj_combined),
+                          DEG_list = rownames(subset(PUF60vsHealthy, avg_log2FC > 0.5 & pct.1 > 0.5 & cluster == "Monocyte")),
+                           comparison = NULL,
+                           species = "H", # H for human
+                           genes_down = NULL,
+                           genes_all = NULL,
+                           GeneSets =c("GO","KEGG","DO","Hallmark","cannonicalPathways","Motifs","ImmunoSignatures"),
+                           GOntology = "BP", #Alternative "MF" or "CC"
+                           pCorrection = "bonferroni", # choose the p-value adjustment method
+                           pvalueCutoff = 0.1, # set the unadj. or adj. p-value cutoff (depending on correction method)
+                           qvalueCutoff = 0.2 # set the q-value cutoff (FDR corrected))
+)
+
+
+dotplotGSEA(tmp_gsea$GOup)
+dotplotGSEA(tmp_gsea$KEGGup)
+dotplotGSEA(tmp_gsea$DOup)
+dotplotGSEA(tmp_gsea$HALLMARKup)
+dotplotGSEA(tmp_gsea$cannonicalPathwaysup)
+dotplotGSEA(tmp_gsea$Motifup)
+dotplotGSEA(tmp_gsea$ImmSigup)
+```
+
+
+## monocytes differences
+
+```{r}
+cell1 = subset(vdj_combined@meta.data,variant=="OAS2" & celltype == "Monocyte")
+cell2 = subset(vdj_combined@meta.data,variant=="healthy" & celltype == "Monocyte")
+OAS2_mono = FindMarkers(vdj_combined,ident.1 = rownames(cell1),ident.2 = rownames(cell2))
+
+
+cell1 = subset(vdj_combined@meta.data,variant=="PUF60" & celltype == "Monocyte")
+cell2 = subset(vdj_combined@meta.data,variant=="healthy" & celltype == "Monocyte")
+puf60_mono = FindMarkers(vdj_combined,ident.1 = rownames(cell1),ident.2 = rownames(cell2))
+
+
+```
+
+
+## canonical markers
+
+```{r}
+
+
+VlnPlot(vdj_combined,features = c("IL7R","CCR7"),group.by = "cluster_celltype",pt.size = 0)
+VlnPlot(vdj_combined,features = c("IL7R","S100A4"),group.by = "cluster_celltype",pt.size = 0)
+
+VlnPlot(vdj_combined,features = c("CD14","LYZ"),group.by = "cluster_celltype",pt.size = 0)
+VlnPlot(vdj_combined,features = c("FCGR3A","MS4A7"),group.by = "cluster_celltype",pt.size = 0)
+
+VlnPlot(vdj_combined,features = c("MS4A1"),group.by = "cluster_celltype",pt.size = 0)
+VlnPlot(vdj_combined,features = c("CD8A"),group.by = "cluster_celltype",pt.size = 0)
+
+VlnPlot(vdj_combined,features = c("GNLY","NKG7"),group.by = "cluster_celltype",pt.size = 0)
+
+VlnPlot(vdj_combined,features = c("FCER1A","CST3"),group.by = "cluster_celltype",pt.size = 0)
+
+VlnPlot(vdj_combined,features = c("PPBP"),group.by = "cluster_celltype",pt.size = 0)
+VlnPlot(vdj_combined,features = c("CD3D"),group.by = "cluster_celltype",pt.size = 0)
+
+FeaturePlot(vdj_combined,features = c("TCF7","FOXP3","GZMH","PDCD1","CD4","CD8A"),dims = c(2,3),order = TRUE,label = TRUE)
+```
+
+## PUF60 expression
+
+```{r}
+VlnPlot(vdj_combined,features = "PUF60",pt.size = 0,group.by = "celltype")
+VlnPlot(vdj_combined,features = "PUF60",pt.size = 0,group.by = "sample")
+VlnPlot(vdj_combined,features = c("PUF60","RBM39","RPTOR"),pt.size = 0,group.by = "sample")
+```
+
+## dotnut plot for cluster freq
+
+```{r}
+tmp_data = cbind(vdj_combined$variant,paste0(vdj_combined$major)) %>% as.data.frame()
+colnames(tmp_data) = c("patient","seurat_clusters")
+
+ns <- table(sample = tmp_data$patient, cell_type = tmp_data$seurat_clusters)
+fq <- prop.table(ns, 1) * 100
+df <- as.data.frame(fq)
+# df = merge(df, unique(vdj_combined@meta.data[,c("sample","variant")]),by.x="sample",by.y="sample")
+
+df$cell_type = factor(df$cell_type,levels = c("Tcell","NK/Tcell","NKcell","Bcell","Monocyte","pDC","Megakaryocyte","Plasmablasts"))
+ggplot(df,aes(x=sample,y=Freq,fill=cell_type))+
+  geom_bar(stat = "identity")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+for(i in unique(df$sample)){
+  data = subset(df,sample==i)
+  data = data[order(data$cell_type),]
+  data$Freq = round(data$Freq,digits = 1)
+  # Compute the cumulative percentages (top of each rectangle)
+  data$ymax <- cumsum(data$Freq)
+
+  # Compute the bottom of each rectangle
+  data$ymin <- c(0, head(data$ymax, n=-1))
+
+  # Compute label position
+  data$labelPosition <- (data$ymax + data$ymin) / 2
+
+  # Compute a good label
+  data$label <- paste0(data$cell_type, "\n value: ", data$Freq)
+
+  # Make the plot
+ p = ggplot(data, aes(ymax=ymax, ymin=ymin, xmax=4, xmin=3, fill=cell_type)) +
+    geom_rect() +
+    # geom_label( x=3.5, aes(y=labelPosition, label=label), size=6) +
+    # scale_fill_brewer(palette=4) +
+    coord_polar(theta="y") +
+    xlim(c(2, 4)) +
+   labs(title = i) +
+    theme_void()
+    # theme(legend.position = "none")
+
+ plot(p)
+}
+
+#
+# # pdf(file = paste0(working.dir,"/analysis_jyu/celltype_freq.barplot.pdf"))
+# for(i in unique(df$cell_type)){
+#   p = ggplot(subset(df,cell_type == i),aes(x=sample,y=Freq,fill=variant))+
+#     geom_bar(stat = "identity")+
+#     labs(title = i)+
+#     theme_classic()+
+#     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+#   plot(p)
+# }
+# # dev.off()
+```
+## barplot for cluster freq
+
+```{r}
+tmp_data = cbind(vdj_combined$sample,paste0("cluster",vdj_combined$seurat_clusters)) %>% as.data.frame()
+colnames(tmp_data) = c("patient","seurat_clusters")
+
+ns <- table(sample = tmp_data$patient, cell_type = tmp_data$seurat_clusters)
+fq <- prop.table(ns, 1) * 100
+df <- as.data.frame(fq)
+df = merge(df, unique(vdj_combined@meta.data[,c("sample","variant")]),by.x="sample",by.y="sample")
+
+df$sample = factor(df$sample,levels = c("HD0051_PBMC", "HD0052_PBMC", "HD0053_PBMC","HD0011_PBMC", "HD0025_PBMC","HD0048_PBMC", "HD0049_PBMC", "HD0050_PBMC"))
+
+# df$cell_type = factor(df$cell_type,levels = c("Tcell","NK/Tcell","NKcell","Bcell","Monocyte","pDC","Megakaryocyte","Plasmablasts"))
+ggplot(df,aes(x=sample,y=Freq,fill=cell_type))+
+  geom_bar(stat = "identity")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+# pdf(file = paste0(working.dir,"/analysis_jyu/celltype_freq.barplot.pdf"))
+# for(i in unique(df$cell_type)){
+  # p = ggplot(subset(df,cell_type == i),aes(x=sample,y=Freq,fill=variant))+
+p = ggplot(df,aes(x=sample,y=Freq,fill=variant))+
+    geom_bar(stat = "identity")+
+  facet_wrap(~cell_type,scales = "free_y")+
+    # labs(title = i)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  plot(p)
+# }
+# dev.off()
+```
+
+## boxplot for cluster freq
+
+```{r}
+tmp_data = cbind(vdj_combined$sample,paste0("",vdj_combined$cluster_celltype)) %>% as.data.frame()
+colnames(tmp_data) = c("patient","seurat_clusters")
+
+ns <- table(sample = tmp_data$patient, cell_type = tmp_data$seurat_clusters)
+fq <- prop.table(ns, 1) * 100
+df <- as.data.frame(fq)
+df = merge(df, unique(vdj_combined@meta.data[,c("sample","variant")]),by.x="sample",by.y="sample")
+
+df$sample = factor(df$sample,levels = c("HD0051_PBMC", "HD0052_PBMC", "HD0053_PBMC","HD0011_PBMC", "HD0025_PBMC","HD0048_PBMC", "HD0049_PBMC", "HD0050_PBMC"))
+
+# pdf(paste0(working.dir,"/analysis_jyu/boxplot_seuratcluster_percondition.pdf"))
+
+for (i in  unique(df$cell_type)){
+  df1 = df %>% subset(.,cell_type == i)
+
+my_comparisons <- list( c("healthy","PUF60"),
+                        c("healthy","OAS2"),
+                        c("OAS2","PUF60"))
+
+df1$variant = factor(df1$variant,levels = c("healthy","OAS2","PUF60"))
+
+   p = ggpubr::ggboxplot(data = df1, x="variant", y= "Freq",add = "jitter",fill = "variant")+
+     ggpubr::stat_compare_means(aes(label = ..p.value..),comparisons = my_comparisons,method = "t.test")+
+     # ylim(c(0,100))+
+     # scale_fill_manual(values = stage_color)+
+     xlab("")+
+     ylab("")+
+     labs(title = paste0("Cluster ",i))+
+     theme(legend.position = "none",
+           axis.text = element_blank())
+
+ print(p)
+
+}
+
+# dev.off()
+```
+
+# annotate CD8 T cells
+
+use signature genes from https://www.cell.com/action/showPdf?pii=S0092-8674%2818%2931568-X
+
+## LAG3 
+
+```{r}
+tmp_cell = vdj_combined@meta.data
+tmp_cell$cell = rownames(tmp_cell)
+
+tmp_cell = tmp_cell %>% dplyr::group_by(seurat_clusters) %>% slice_sample(n=20)
+
+tmp_genes = read.csv2(file = paste0(working.dir,"/analysis_jyu/LAG3cells.txt"),sep = " ",header = FALSE) %>% t()
+
+Idents(vdj_combined) = "seurat_clusters"
+Tcell = subset(vdj_combined,idents=c(0,1,2,3,4,5,6,8,10,11,13,14,15,19))
+
+DoHeatmap(Tcell[,tmp_cell$cell],features = tmp_genes)
+
+Tcell = AddModuleScore(object = Tcell,
+                              features = list(tmp_genes),
+                              name = "LAG3")
+
+
+VlnPlot(Tcell,features = "LAG31",group.by = "seurat_clusters",pt.size = 0)
+FeaturePlot(Tcell,features = "LAG3",dims = c(2,3),order = TRUE,label = TRUE)
+```
+
+## FGFBP2, cytotoxic
+
+```{r}
+tmp_genes = read.csv2(file = paste0(working.dir,"/analysis_jyu/cytotoxic.txt"),sep = " ",header = FALSE) %>% t()
+DoHeatmap(Tcell,features = tmp_genes)
+
+DoHeatmap(Tcell[,tmp_cell$cell], features = tmp_genes) + NoLegend()
+
+Tcell = AddModuleScore(object = Tcell,
+                              features = list(tmp_genes),
+                              name = "cytotoxic")
+
+VlnPlot(Tcell,features = "cytotoxic1",group.by = "seurat_clusters",pt.size = 0)
+FeaturePlot(Tcell,features = "cytotoxic1",dims = c(2,3),order = TRUE,label = TRUE)
+```
+
+## KLF2 cells, cytotoxic
+
+```{r}
+tmp_genes = read.csv2(file = paste0(working.dir,"/analysis_jyu/KLFcells.txt"),sep = " ",header = FALSE) %>% t()
+
+Tcell = AddModuleScore(object = Tcell,
+                              features = list(tmp_genes),
+                              name = "KLF2")
+
+VlnPlot(Tcell,features = "KLF2",group.by = "seurat_clusters",pt.size = 0)
+# FeaturePlot(Tcell,features = "KLF2",dims = c(1,3),order = TRUE,label = TRUE)
+# FeaturePlot(Tcell,features = "KLF2",dims = c(1,2),order = TRUE,label = TRUE)
+FeaturePlot(Tcell,features = "KLF2",dims = c(2,3),order = TRUE,label = TRUE)
+```
+
+
+## KMT2A cells, cytotoxic
+
+```{r}
+tmp_genes = read.csv2(file = paste0(working.dir,"/analysis_jyu/KMT2A.txt"),sep = " ",header = FALSE) %>% t()
+
+Tcell = AddModuleScore(object = Tcell,
+                              features = list(tmp_genes),
+                              name = "KMT2A")
+
+VlnPlot(Tcell,features = "KMT2A",group.by = "seurat_clusters",pt.size = 0)
+FeaturePlot(Tcell,features = "KMT2A",dims = c(1,3),order = TRUE,label = TRUE)
+```
+
+# annotate CD4 T cells
+
+use signature genes from https://www.cell.com/action/showPdf?pii=S0092-8674%2818%2931568-X
+
+## Treg
+
+```{r}
+tmp_genes = read.csv2(file = paste0(working.dir,"/analysis_jyu/Treg.txt"),sep = " ",header = FALSE) %>% t()
+DoHeatmap(Tcell[,tmp_cell$cell], features = tmp_genes,slot="data") + NoLegend()
+Tcell = AddModuleScore(object = Tcell,
+                              features = list(tmp_genes),
+                              name = "Treg")
+
+VlnPlot(Tcell,features = "Treg1",group.by = "seurat_clusters",pt.size = 0)
+FeaturePlot(Tcell,features = "Treg1",dims = c(2,3),order = TRUE,label = TRUE)
+
+VlnPlot(Tcell,features = c("FOXP3","CTLA4"),pt.size = 0)
+```
+# cellcyle
+
+```{r}
+tmp_genes = read.csv2(file = paste0(working.dir,"/analysis_jyu/cellcycle.txt"),header = FALSE)
+
+Tcell = AddModuleScore(object = Tcell,
+                              features = list(tmp_genes$V1),
+                              name = "cellcycle")
+
+VlnPlot(Tcell,features = "cellcycle1",group.by = "seurat_clusters",pt.size = 0)
+FeaturePlot(Tcell,features = "cellcycle1",dims = c(2,3),order = TRUE,label = TRUE)
+```
+# stress
+
+```{r}
+tmp_genes = read.csv2(file = paste0(working.dir,"/analysis_jyu/stress.txt"),header = FALSE)
+
+Tcell = AddModuleScore(object = Tcell,
+                              features = list(tmp_genes$V1),
+                              name = "stress")
+
+VlnPlot(Tcell,features = "stress1",group.by = "seurat_clusters",pt.size = 0)
+FeaturePlot(Tcell,features = "stress1",dims = c(2,3),order = TRUE,label = TRUE)
+```
+
+# IFN
+
+```{r}
+tmp_genes = read.csv2(file = paste0(working.dir,"/analysis_jyu/IFN.txt"),header = FALSE)
+
+Tcell = AddModuleScore(object = Tcell,
+                              features = list(tmp_genes$V1),
+                              name = "IFN")
+
+VlnPlot(Tcell,features = "IFN1",group.by = "seurat_clusters",pt.size = 0)
+FeaturePlot(Tcell,features = "IFN1",dims = c(2,3),order = TRUE,label = TRUE)
+```
+
+# autophage
+
+```{r}
+autophage = readxl::read_excel(path = paste0(working.dir,"/analysis_jyu/Autophagy_Genes_211208.xlsx")) %>% as.data.frame()
+
+# pdf(paste0(working.dir,"/analysis_jyu/score_Autophagy_Genes_2112081.pdf"))
+for (i in colnames(autophage)){
+  tmp_genes = autophage[,i]
+  Tcell = AddModuleScore(object = vdj_combined,features = list(tmp_genes),name = i)
+  p = VlnPlot(Tcell,features = paste0(i,1),group.by = "cluster_celltype",pt.size = 0,split.by = "variant")
+  # p = DoHeatmap(Tcell,features = tmp_genes,slot = "count")
+  plot(p)
+}
+
+# dev.off()
+```
+
+
+# autophage2
+
+```{r}
+autophage = readxl::read_excel(path = paste0(working.dir,"/analysis_jyu/GO_List_AutophagyMTOR.xlsx")) %>% as.data.frame()
+
+# pdf(paste0(working.dir,"/analysis_jyu/score_GO_List_AutophagyMTOR.pdf"))
+for (i in colnames(autophage)){
+  tmp_genes = autophage[,i]
+  Tcell = AddModuleScore(object = Tcell,features = list(tmp_genes),name = i)
+  p = VlnPlot(Tcell,features = paste0(i,1),group.by = "cluster_celltype",pt.size = 0,split.by = "variant")
+  # p = DoHeatmap(vdj_combined,features = tmp_genes,slot = "count")
+  plot(p)
+}
+
+# dev.off()
+```
+
+# autophage2
+
+```{r}
+autophage = readxl::read_excel(path = paste0(working.dir,"/analysis_jyu/GO_List_AutophagyMTOR.xlsx")) %>% as.data.frame()
+
+# pdf(paste0(working.dir,"/analysis_jyu/autophage.pdf"))
+for (i in colnames(autophage)){
+  tmp_genes = autophage[,i]
+  # Tcell = AddModuleScore(object = vdj_combined,features = list(tmp_genes),name = i)
+  # p = VlnPlot(vdj_combined,features = paste0(i,1),group.by = "seurat_clusters",pt.size = 0)
+  p = DoHeatmap(vdj_combined,features = tmp_genes,slot = "count")
+  plot(p)
+}
+# dev.off()
+```
+
+```{r}
+tmp_genes = c("CD3D","CD4","CD8A","CD8B","TRAC","TRBC2","CTLA4","FOXP3","CCL5","NKG7","GZMA","TNFRSF4","IL7R","TCF7","IFNG","TIGIT","LAG3","PDCD1","KIR2DL4","ISG15","ITM2A","GZMB","CCL3","CCL4","CXCL13","GZMK","GZMH","KLRB1","CCR5","PRF1","IL32","FGFBP2","FCGR3A","CX3CR1","CD5","GNLY")
+
+DotPlot(vdj_combined,features = tmp_genes)+
+  RotatedAxis()
+
+VlnPlot(Tcell,features = c("HLA-DRA"),pt.size = 0)
+```
+
+# sessioninfor
+
+```{r,results='asis'}
+sessionInfo()
+```
+
